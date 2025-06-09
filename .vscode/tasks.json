@@ -1,0 +1,13 @@
+{
+    // See https://code.visualstudio.com/docs/editor/tasks for more details
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build for Raspberry Pi (ARM)",
+            "type": "shell",
+            "command": "cargo build --release --target=armv7-unknown-linux-gnueabihf",
+            "group": "build",
+            "problemMatcher": ["$rustc"]
+        }
+    ]
+}
