@@ -13,6 +13,7 @@ use std::fmt;
 pub enum SettingValue {
     Integer(i64),
     Text(String),
+	Boolean(bool),
 }
 
 impl fmt::Display for SettingValue {
@@ -20,6 +21,7 @@ impl fmt::Display for SettingValue {
         match self {
             SettingValue::Integer(val) => write!(f, "{}", val),
             SettingValue::Text(val) => write!(f, "{}", val),
+			SettingValue::Boolean(val) => write!(f, "{}", if *val { "true" } else { "false" }),	
         }
     }
 }
@@ -34,12 +36,11 @@ impl From<Value> for SettingValue {
     }
 }
 
-// Renamed to follow Rust's UpperCamelCase convention
-pub struct SqlManager {
+pub struct SqlDbManager {
     conn: Connection,
 }
 
-impl SqlManager {
+impl SqlDbManager {
     pub fn new(db_path: &str) -> Result<Self> {
         let db_exists = Path::new(db_path).exists();
         let mut conn = Connection::open(db_path)?;
@@ -53,10 +54,10 @@ impl SqlManager {
                 Self::set_schema_version(&mut conn, SCHEMA_VERSION)?;
             }
         }
-        Ok(SqlManager { conn })
+        Ok(SqlDbManager { conn })
     }
 
-    pub fn get_all_settings(&self) -> Result<HashMap<String, SettingValue>> {
+    pub fn _get_all_settings(&self) -> Result<HashMap<String, SettingValue>> {
         let mut settings_map = HashMap::new();
         for table in SCHEMA {
             for column in table.columns {
@@ -80,7 +81,7 @@ impl SqlManager {
         let (table_name, column) = self.find_table_and_column(key)?;
         match column.data_type {
             "INTEGER" => {
-                let int_val = value.parse::<i64>().map_err(|_| rusqlite::Error::InvalidParameterName("Expected integer value".to_string()))?;
+                let int_val = value.parse::<i32>().map_err(|_| rusqlite::Error::InvalidParameterName("Expected integer value".to_string()))?;
                 self.conn.execute(
                     &format!("UPDATE {} SET {} = ?1 WHERE id = 1", table_name, key),
                     params![int_val],
@@ -170,7 +171,7 @@ impl SqlManager {
                                 |row| row.get(0),
                             ).ok();
                             let needs_update = match (schema_type_upper.as_str(), value.as_deref()) {
-                                ("INTEGER", Some(v)) => v.parse::<i64>().is_err(),
+                                ("INTEGER", Some(v)) => v.parse::<i32>().is_err(),
                                 ("REAL", Some(v)) => v.parse::<f64>().is_err(),
                                 ("BOOLEAN", Some(v)) => !(v == "0" || v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false")),
                                 ("TEXT", _) => false, // Any value is valid for TEXT
