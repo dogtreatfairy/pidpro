@@ -2,6 +2,7 @@
 
 mod database;
 mod boards;
+mod controller;
 
 use database::sql::SqlDbManager;
 use boards::{
@@ -30,18 +31,38 @@ use boards::orangepi_hal::SysfsOrangePiHal;
 
 use rusqlite::Result;
 use std::io::{self, Write};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::thread;
+use controller::run_controller_with_flag;
 
+
+fn get_default_board_type() -> &'static str {
+    #[cfg(feature = "rpi")]
+    { return "pfpwm"; }
+    #[cfg(feature = "esp32")]
+    { return "esp32"; }
+    #[cfg(feature = "orangepi")]
+    { return "orangepi"; }
+    // fallback default
+    "pfpwm"
+}
 
 fn main() -> Result<()> {
     let db_path = "settings.db";
-
     let sql_manager = SqlDbManager::new(db_path)?;
 
-    // Initial board type check, not strictly needed here as it's fetched per command
-    // let board_type_str = sql_manager.get_setting("board_type").unwrap_or_else(|_|"pfpwm".to_string());
-    // println!("Initial board type from DB: {}", board_type_str);
+    // Use the default board type if not set in the database
+    if sql_manager.get_setting("board_type").is_err() {
+        let default_board = get_default_board_type();
+        let _ = sql_manager.set_setting("board_type", default_board);
+        println!("[INFO] No board_type set. Defaulting to: {}", default_board);
+    }
 
     println!("Dynamic Settings Manager. Type 'help' for commands.");
+
+    // Controller thread management
+    let running = Arc::new(AtomicBool::new(false));
+    let mut controller_handle = None;
 
     loop {
         print!("> ");
@@ -57,6 +78,84 @@ fn main() -> Result<()> {
         let command = parts.get(0).unwrap_or(&"");
 
         match *command {
+            "start" => {
+                if running.load(Ordering::SeqCst) {
+                    println!("Controller is already running.");
+                } else {
+                    running.store(true, Ordering::SeqCst);
+                    let running_flag = running.clone();
+                    // Clone board selection logic from fanon/fanoff
+                    let current_board_type = match sql_manager.get_setting("board_type") {
+                        Ok(val) => val.to_string(),
+                        Err(_) => "pfpwm".to_string(),
+                    };
+                    controller_handle = Some(thread::spawn(move || {
+                        match current_board_type.as_str() {
+                            "pfpwm" => {
+                                let board_map = PinMap { pins: PFPWM_PIN_MAP, board_name: PFPWM_BOARD_NAME };
+                                #[cfg(feature = "rpi")]
+                                {
+                                    if let Ok(hal) = RppalHal::new() {
+                                        let mut bridge = HardwareBridge::new(board_map, hal);
+                                        run_controller_with_flag(&mut bridge, running_flag);
+                                    }
+                                }
+                                #[cfg(not(feature = "rpi"))]
+                                {
+                                    let dummy_hal = DummyHal;
+                                    let mut bridge = HardwareBridge::new(board_map, dummy_hal);
+                                    run_controller_with_flag(&mut bridge, running_flag);
+                                }
+                            }
+                            "esp32" => {
+                                let board_map = PinMap { pins: ESP32_PIN_MAP, board_name: ESP32_BOARD_NAME };
+                                #[cfg(feature = "esp32")]
+                                {
+                                    if let Ok(hal) = EspIdfHal::new() {
+                                        let mut bridge = HardwareBridge::new(board_map, hal);
+                                        run_controller_with_flag(&mut bridge, running_flag);
+                                    }
+                                }
+                                #[cfg(not(feature = "esp32"))]
+                                {
+                                    let dummy_hal = DummyHal;
+                                    let mut bridge = HardwareBridge::new(board_map, dummy_hal);
+                                    run_controller_with_flag(&mut bridge, running_flag);
+                                }
+                            }
+                            "orangepi" => {
+                                let board_map = PinMap { pins: OPI_ZERO_PIN_MAP, board_name: OPI_ZERO_BOARD_NAME };
+                                #[cfg(feature = "orangepi")]
+                                {
+                                    if let Ok(hal) = SysfsOrangePiHal::new() {
+                                        let mut bridge = HardwareBridge::new(board_map, hal);
+                                        run_controller_with_flag(&mut bridge, running_flag);
+                                    }
+                                }
+                                #[cfg(not(feature = "orangepi"))]
+                                {
+                                    let dummy_hal = DummyHal;
+                                    let mut bridge = HardwareBridge::new(board_map, dummy_hal);
+                                    run_controller_with_flag(&mut bridge, running_flag);
+                                }
+                            }
+                            _ => println!("[ERROR] Unknown board_type '{}' configured. Cannot start controller.", current_board_type),
+                        }
+                    }));
+                    println!("Controller started.");
+                }
+            }
+            "stop" => {
+                if running.load(Ordering::SeqCst) {
+                    running.store(false, Ordering::SeqCst);
+                    if let Some(handle) = controller_handle.take() {
+                        let _ = handle.join();
+                    }
+                    println!("Controller stopped.");
+                } else {
+                    println!("Controller is not running.");
+                }
+            }
             "get" => {
                 if let Some(key) = parts.get(1) {
                     match sql_manager.get_setting(key) {
@@ -92,6 +191,8 @@ fn main() -> Result<()> {
             }
             "help" => {
                 println!("Available commands:");
+                println!("  start              - Start the controller loop.");
+                println!("  stop               - Stop the controller loop.");
                 println!("  get <key>          - Get a setting's value.");
                 println!("  set <key> <value>  - Set a setting's value.");
                 println!("  list               - List all settings and their current values.");
