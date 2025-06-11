@@ -28,7 +28,8 @@ pub const SCHEMA: &[Table] = &[
 			Column { name: "device_name", data_type: "TEXT", default_value: "'PIDPro'" }, // Name of the device.
 			Column { name: "device_id", data_type: "TEXT", default_value: "'default-id'" }, // Unique identifier for the device.
 			Column { name: "version", data_type: "INTEGER", default_value: "1" }, // Version of the configuration.
-			Column { name: "board_type", data_type: "TEXT", default_value: "'pfpwm'" }, // Type of board used (e.g., ESP32 (esp32), Raspberry Pi Zero 2 W (p02w)).
+			Column { name: "board", data_type: "TEXT", default_value: "'pfpwm'" }, // Type of board used (e.g., ESP32 (esp32), Raspberry Pi Zero 2 W (p02w)).
+			Column { name: "controller", data_type: "TEXT", default_value: "'pmode'" }, // Type of controller (e.g., pidpro).
 		],
 	},
 	Table {

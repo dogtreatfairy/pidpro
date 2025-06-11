@@ -41,11 +41,11 @@ pub const PIN_MAP: &[Pin] = &[
     Pin { gpio_pin: 11, function_name: "FLASH_CS0_CMD", pin_type: PinType::Other("FLASH"), physical_pin: Some(33) }, // SPI Flash CS0 / CMD
     Pin { gpio_pin: 102, function_name: "GND_3", pin_type: PinType::Other("POWER"), physical_pin: Some(34) }, // GND
     Pin { gpio_pin: 103, function_name: "VIN_5V", pin_type: PinType::Other("POWER"), physical_pin: Some(35) }, // 5V Power In
-    // Define RELAY_FAN and RELAY_AUGER, RELAY_IGNITER, PWM_FAN based on typical ESP32 usage
+    // Define RELAY_FAN and RELAY_AUG, RELAY_IGN, PWM_FAN based on typical ESP32 usage
     // These are examples and should be verified for your specific ESP32 board/module
     Pin { gpio_pin: 2, function_name: "RELAY_FAN", pin_type: PinType::GpioOutput, physical_pin: Some(2) }, // Using GPIO2 as an example for Fan Relay
-    Pin { gpio_pin: 4, function_name: "RELAY_AUGER", pin_type: PinType::GpioOutput, physical_pin: Some(4) }, // Using GPIO4 as an example for Auger Relay
-    Pin { gpio_pin: 5, function_name: "RELAY_IGNITER", pin_type: PinType::GpioOutput, physical_pin: Some(5) }, // Using GPIO5 as an example for Igniter Relay
+    Pin { gpio_pin: 4, function_name: "RELAY_AUG", pin_type: PinType::GpioOutput, physical_pin: Some(4) }, // Using GPIO4 as an example for Auger Relay
+    Pin { gpio_pin: 5, function_name: "RELAY_IGN", pin_type: PinType::GpioOutput, physical_pin: Some(5) }, // Using GPIO5 as an example for Igniter Relay
     Pin { gpio_pin: 18, function_name: "PWM_FAN", pin_type: PinType::Pwm, physical_pin: Some(8) }, // Using GPIO18 as an example for PWM Fan
 ];
 

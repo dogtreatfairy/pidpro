@@ -33,10 +33,12 @@ use rusqlite::Result;
 use std::io::{self, Write};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
-use controller::run_controller_with_flag;
+use controller::{run_controller_with_flag, ControllerType};
+use controller::pmode::PModeController;
+use controller::pid::PidController;
 
 
-fn get_default_board_type() -> &'static str {
+fn get_default_board() -> &'static str {
     #[cfg(feature = "rpi")]
     { return "pfpwm"; }
     #[cfg(feature = "esp32")]
@@ -52,10 +54,10 @@ fn main() -> Result<()> {
     let sql_manager = SqlDbManager::new(db_path)?;
 
     // Use the default board type if not set in the database
-    if sql_manager.get_setting("board_type").is_err() {
-        let default_board = get_default_board_type();
-        let _ = sql_manager.set_setting("board_type", default_board);
-        println!("[INFO] No board_type set. Defaulting to: {}", default_board);
+    if sql_manager.get_setting("board").is_err() {
+        let default_board = get_default_board();
+        let _ = sql_manager.set_setting("board", default_board);
+        println!("[INFO] No board set. Defaulting to: {}", default_board);
     }
 
     println!("Dynamic Settings Manager. Type 'help' for commands.");
@@ -84,27 +86,40 @@ fn main() -> Result<()> {
                 } else {
                     running.store(true, Ordering::SeqCst);
                     let running_flag = running.clone();
-                    // Clone board selection logic from fanon/fanoff
-                    let current_board_type = match sql_manager.get_setting("board_type") {
+                    let current_board = match sql_manager.get_setting("board") {
                         Ok(val) => val.to_string(),
                         Err(_) => "pfpwm".to_string(),
                     };
+                    let current_controller = match sql_manager.get_setting("controller") {
+                        Ok(val) => val.to_string(),
+                        Err(_) => "pmode".to_string(),
+                    };
+                    let cycle_length = match sql_manager.get_setting("cycle_length") {
+                        Ok(val) => val.to_string().parse::<u64>().unwrap_or(15),
+                        Err(_) => 15,
+                    };
                     controller_handle = Some(thread::spawn(move || {
-                        match current_board_type.as_str() {
+                        // Select controller
+                        let controller = match current_controller.as_str() {
+                            "pmode" => ControllerType::PMode(PModeController::new(0)), // TODO: get p_mode value from settings
+                            "pid" => ControllerType::PID(PidController::new()),
+                            _ => ControllerType::PMode(PModeController::new(0)),
+                        };
+                        match current_board.as_str() {
                             "pfpwm" => {
                                 let board_map = PinMap { pins: PFPWM_PIN_MAP, board_name: PFPWM_BOARD_NAME };
                                 #[cfg(feature = "rpi")]
                                 {
                                     if let Ok(hal) = RppalHal::new() {
                                         let mut bridge = HardwareBridge::new(board_map, hal);
-                                        run_controller_with_flag(&mut bridge, running_flag);
+                                        run_controller_with_flag(&mut bridge, running_flag, &controller, cycle_length);
                                     }
                                 }
                                 #[cfg(not(feature = "rpi"))]
                                 {
                                     let dummy_hal = DummyHal;
                                     let mut bridge = HardwareBridge::new(board_map, dummy_hal);
-                                    run_controller_with_flag(&mut bridge, running_flag);
+                                    run_controller_with_flag(&mut bridge, running_flag, &controller, cycle_length);
                                 }
                             }
                             "esp32" => {
@@ -113,14 +128,14 @@ fn main() -> Result<()> {
                                 {
                                     if let Ok(hal) = EspIdfHal::new() {
                                         let mut bridge = HardwareBridge::new(board_map, hal);
-                                        run_controller_with_flag(&mut bridge, running_flag);
+                                        run_controller_with_flag(&mut bridge, running_flag, &controller, cycle_length);
                                     }
                                 }
                                 #[cfg(not(feature = "esp32"))]
                                 {
                                     let dummy_hal = DummyHal;
                                     let mut bridge = HardwareBridge::new(board_map, dummy_hal);
-                                    run_controller_with_flag(&mut bridge, running_flag);
+                                    run_controller_with_flag(&mut bridge, running_flag, &controller, cycle_length);
                                 }
                             }
                             "orangepi" => {
@@ -129,17 +144,17 @@ fn main() -> Result<()> {
                                 {
                                     if let Ok(hal) = SysfsOrangePiHal::new() {
                                         let mut bridge = HardwareBridge::new(board_map, hal);
-                                        run_controller_with_flag(&mut bridge, running_flag);
+                                        run_controller_with_flag(&mut bridge, running_flag, &controller, cycle_length);
                                     }
                                 }
                                 #[cfg(not(feature = "orangepi"))]
                                 {
                                     let dummy_hal = DummyHal;
                                     let mut bridge = HardwareBridge::new(board_map, dummy_hal);
-                                    run_controller_with_flag(&mut bridge, running_flag);
+                                    run_controller_with_flag(&mut bridge, running_flag, &controller, cycle_length);
                                 }
                             }
-                            _ => println!("[ERROR] Unknown board_type '{}' configured. Cannot start controller.", current_board_type),
+                            _ => println!("[ERROR] Unknown board '{}' configured. Cannot start controller.", current_board),
                         }
                     }));
                     println!("Controller started.");
@@ -199,18 +214,19 @@ fn main() -> Result<()> {
                 println!("  fanon              - Turn the fan relay ON.");
                 println!("  fanoff             - Turn the fan relay OFF.");
                 println!("  switch             - Switch the active board type.");
+                println!("  controller         - Switch the controller type.");
                 println!("  exit               - Exit the application.");
             }
             "fanon" | "fanoff" => {
                 // Fix: get_setting returns SettingValue, not String
-                let current_board_type = match sql_manager.get_setting("board_type") {
+                let current_board = match sql_manager.get_setting("board") {
                     Ok(val) => val.to_string(),
                     Err(_) => "pfpwm".to_string(),
                 };
                 let target_state = if *command == "fanon" { HalPinState::High } else { HalPinState::Low };
-                println!("[INFO] Command: {}, Board Type: {}, Target State: {:?}", command, current_board_type, target_state);
+                println!("[INFO] Command: {}, Board Type: {}, Target State: {:?}", command, current_board, target_state);
 
-                match current_board_type.as_str() {
+                match current_board.as_str() {
                     "pfpwm" => {
                         let board_map = PinMap { pins: PFPWM_PIN_MAP, board_name: PFPWM_BOARD_NAME };
                         #[cfg(feature = "rpi")]
@@ -289,11 +305,39 @@ fn main() -> Result<()> {
                             handle_fan_command(&mut bridge, target_state, "RELAY_FAN");
                         }
                     }
-                    _ => println!("[ERROR] Unknown board_type '{}' configured. Cannot control fan.", current_board_type),
+                    _ => println!("[ERROR] Unknown board '{}' configured. Cannot control fan.", current_board),
                 }
             }
             "switch" => {
                 switch(&sql_manager);
+            }
+            "controller" => {
+                let controllers = vec![
+                    ("pmode", "Simple P-Mode (on/off) Controller"),
+                    ("pid", "PID Controller (scaffold)")
+                ];
+                println!("Available controllers:");
+                for (i, (key, desc)) in controllers.iter().enumerate() {
+                    println!("  {}. {} - {}", i + 1, key, desc);
+                }
+                print!("Select a controller by number (1-{}): ", controllers.len());
+                io::stdout().flush().unwrap();
+                let mut input = String::new();
+                if io::stdin().read_line(&mut input).is_err() {
+                    println!("Error reading input.");
+                    continue;
+                }
+                let selection = input.trim().parse::<usize>();
+                match selection {
+                    Ok(num) if num >= 1 && num <= controllers.len() => {
+                        let (selected_key, selected_desc) = controllers[num - 1];
+                        match sql_manager.set_setting("controller", selected_key) {
+                            Ok(_) => println!("Controller switched to: {} - {}", selected_key, selected_desc),
+                            Err(e) => println!("Error updating controller: {}", e),
+                        }
+                    }
+                    _ => println!("Invalid selection."),
+                }
             }
             "exit" => {
                 println!("Exiting.");
@@ -377,9 +421,9 @@ fn switch(sql_manager: &SqlDbManager) {
     match selection {
         Ok(num) if num >= 1 && num <= boards.len() => {
             let (selected_key, selected_name) = boards[num - 1];
-            match sql_manager.set_setting("board_type", selected_key) {
+            match sql_manager.set_setting("board", selected_key) {
                 Ok(_) => println!("Board switched to: {} - {}", selected_key, selected_name),
-                Err(e) => println!("Error updating board_type: {}", e),
+                Err(e) => println!("Error updating board: {}", e),
             }
         }
         _ => println!("Invalid selection."),

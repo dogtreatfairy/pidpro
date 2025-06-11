@@ -7,6 +7,7 @@ use rusqlite::{Connection, Result, params, types::Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::fmt;
+use crate::controller::{ControllerSchema, pmode::PModeController, pid::PidController};
 
 
 #[derive(Debug)]
@@ -43,16 +44,26 @@ pub struct SqlDbManager {
 impl SqlDbManager {
     pub fn new(db_path: &str) -> Result<Self> {
         let db_exists = Path::new(db_path).exists();
-        let mut conn = Connection::open(db_path)?;
+        let mut conn = Connection::open(db_path)?;        // Gather all controller tables
+        let mut controller_tables: Vec<&'static super::sql_schema::Table> = Vec::new();
+        controller_tables.extend(PModeController::controller_tables().iter());
+        controller_tables.extend(PidController::controller_tables().iter());
+        // Compose full schema: static + controller tables (as slices of references)
+        // Convert SCHEMA (&[Table]) to &[&Table] for type compatibility
+        let mut full_schema: Vec<&'static super::sql_schema::Table> = SCHEMA.iter().collect();
+        full_schema.extend(controller_tables);
+        let full_schema_slice: &[&super::sql_schema::Table] = &full_schema;
         if !db_exists {
-            Self::initialize_database(&mut conn)?;
+            Self::initialize_database_with_schema(&mut conn, full_schema_slice)?;
             Self::set_schema_version(&mut conn, SCHEMA_VERSION)?;
         } else {
             let current_version = Self::get_schema_version(&mut conn)?;
             if SCHEMA_VERSION > current_version {
-                Self::migrate_schema(&mut conn, current_version, SCHEMA_VERSION)?;
+                Self::migrate_schema_with_schema(&mut conn, current_version, SCHEMA_VERSION, full_schema_slice)?;
                 Self::set_schema_version(&mut conn, SCHEMA_VERSION)?;
             }
+            // Remove tables for controllers that are no longer present
+            Self::cleanup_controller_tables(&mut conn, full_schema_slice)?;
         }
         Ok(SqlDbManager { conn })
     }
@@ -218,6 +229,95 @@ impl SqlDbManager {
         Ok(())
     }
 
+    fn migrate_schema_with_schema(conn: &mut Connection, _from_version: u32, _to_version: u32, schema: &[&super::sql_schema::Table]) -> Result<()> {
+        // (copy logic from migrate_schema, but use provided schema)
+        // For each table in the schema
+        for table in schema {
+            // Get columns in the actual database
+            let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table.name))?;
+            let db_columns: Vec<(String, String)> = stmt
+                .query_map([], |row| Ok((row.get(1)?, row.get::<_, String>(2)?)))?
+                .filter_map(Result::ok)
+                .collect();
+            // Add missing columns and check type changes
+            for column in table.columns {
+                match db_columns.iter().find(|(c, _)| c == column.name) {
+                    Some((_, db_type)) => {
+                        // If type does not match, update value if needed
+                        let db_type_upper = db_type.to_uppercase();
+                        let schema_type_upper = column.data_type.to_uppercase();
+                        if db_type_upper != schema_type_upper {
+                            // Check current value
+                            let value: Option<String> = conn.query_row(
+                                &format!("SELECT {} FROM {} WHERE id = 1", column.name, table.name),
+                                [],
+                                |row| row.get(0),
+                            ).ok();
+                            let needs_update = match (schema_type_upper.as_str(), value.as_deref()) {
+                                ("INTEGER", Some(v)) => v.parse::<i32>().is_err(),
+                                ("REAL", Some(v)) => v.parse::<f64>().is_err(),
+                                ("BOOLEAN", Some(v)) => !(v == "0" || v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false")),
+                                ("TEXT", _) => false, // Any value is valid for TEXT
+                                _ => false,
+                            };
+                            if needs_update {
+                                let sql = format!("UPDATE {} SET {} = {} WHERE id = 1", table.name, column.name, column.default_value);
+                                println!("[MIGRATION] Type changed for {}. Setting default: {}", column.name, sql);
+                                let _ = conn.execute(&sql, []);
+                            }
+                        }
+                    }
+                    None => {
+                        // Add missing column
+                        let sql = format!("ALTER TABLE {} ADD COLUMN {} {} DEFAULT {}", table.name, column.name, column.data_type, column.default_value);
+                        println!("[MIGRATION] {}", sql);
+                        let _ = conn.execute(&sql, []);
+                    }
+                }
+            }
+        }
+        // Handle renames
+        for (table, old_col, new_col) in super::sql_schema::RENAMES {
+            let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+            let db_columns: Vec<String> = stmt
+                .query_map([], |row| row.get(1))?
+                .filter_map(Result::ok)
+                .collect();
+            if db_columns.contains(&old_col.to_string()) && !db_columns.contains(&new_col.to_string()) {
+                // Find new column type/default from schema
+                if let Some(table_schema) = schema.iter().find(|t| t.name == *table) {
+                    if let Some(new_col_schema) = table_schema.columns.iter().find(|c| c.name == *new_col) {
+                        let sql = format!("ALTER TABLE {} ADD COLUMN {} {} DEFAULT {}", table, new_col, new_col_schema.data_type, new_col_schema.default_value);
+                        println!("[MIGRATION] {}", sql);
+                        let _ = conn.execute(&sql, []);
+                        let sql = format!("UPDATE {} SET {} = {}", table, new_col, old_col);
+                        println!("[MIGRATION] {}", sql);
+                        let _ = conn.execute(&sql, []);
+                        // Note: SQLite cannot drop columns directly; document manual cleanup if needed
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn cleanup_controller_tables(conn: &mut Connection, schema: &[&super::sql_schema::Table]) -> Result<()> {
+        // Get all tables in DB
+        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table'")?;
+        let db_tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        let schema_tables: Vec<&str> = schema.iter().map(|t| t.name).collect();
+        for db_table in db_tables {
+            if db_table.ends_with("_settings") && !schema_tables.contains(&db_table.as_str()) {
+                let sql = format!("DROP TABLE IF EXISTS {}", db_table);
+                let _ = conn.execute(&sql, []);
+            }
+        }
+        Ok(())
+    }
+
     fn find_table_and_column(&self, key: &str) -> Result<(&'static str, &'static Column)> {
         for table in SCHEMA {
             if let Some(column) = table.columns.iter().find(|c| c.name == key) {
@@ -237,6 +337,30 @@ impl SqlDbManager {
                 .collect::<Vec<String>>()
                 .join(", ");
 
+            let create_sql = format!("CREATE TABLE {} (id INTEGER PRIMARY KEY, {});", table.name, columns_sql);
+            let insert_sql = format!("INSERT INTO {} (id) VALUES (1);", table.name);
+            transaction.execute(&create_sql, [])?;
+            transaction.execute(&insert_sql, [])?;
+        }
+        transaction.execute(
+            "CREATE TABLE IF NOT EXISTS meta (id INTEGER PRIMARY KEY, version INTEGER)",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO meta (id, version) VALUES (1, ?1)",
+            [SCHEMA_VERSION],
+        )?;
+        transaction.commit()
+    }
+
+    fn initialize_database_with_schema(conn: &mut Connection, schema: &[&super::sql_schema::Table]) -> Result<()> {
+        let transaction = conn.transaction()?;
+        for table in schema {
+            let columns_sql: String = table.columns
+                .iter()
+                .map(|c| format!("{} {} DEFAULT {}", c.name, c.data_type, c.default_value))
+                .collect::<Vec<String>>()
+                .join(", ");
             let create_sql = format!("CREATE TABLE {} (id INTEGER PRIMARY KEY, {});", table.name, columns_sql);
             let insert_sql = format!("INSERT INTO {} (id) VALUES (1);", table.name);
             transaction.execute(&create_sql, [])?;
