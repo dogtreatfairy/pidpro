@@ -31,6 +31,7 @@ impl ControllerSchema for PModeController {
                 name: "pmode_settings",
                 columns: &[
                     Column { name: "p_mode", data_type: "INTEGER", default_value: "4" },
+                    Column { name: "cycle_time", data_type: "INTEGER", default_value: "15" },
                 ],
             },
         ];

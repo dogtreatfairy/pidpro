@@ -27,10 +27,10 @@ impl ControllerSchema for PidController {
             Table {
                 name: "pid_settings",
                 columns: &[
-                    Column { name: "kp", data_type: "REAL", default_value: "2.0" },
-                    Column { name: "ki", data_type: "REAL", default_value: "0.5" },
-                    Column { name: "kd", data_type: "REAL", default_value: "1.0" },
-                    Column { name: "setpoint", data_type: "INTEGER", default_value: "225" },
+                    Column { name: "Pb", data_type: "REAL", default_value: "65.0" },
+                    Column { name: "Ti", data_type: "REAL", default_value: "180.0" },
+                    Column { name: "Td", data_type: "REAL", default_value: "45.0" },
+                    Column { name: "cycle_time", data_type: "INTEGER", default_value: "15" },
                 ],
             },
         ];

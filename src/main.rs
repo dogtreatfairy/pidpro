@@ -94,9 +94,11 @@ fn main() -> Result<()> {
                         Ok(val) => val.to_string(),
                         Err(_) => "pmode".to_string(),
                     };
-                    let cycle_length = match sql_manager.get_setting("cycle_length") {
+                    
+                    // Get cycle time from controller-specific settings
+                    let cycle_length = match sql_manager.get_setting("cycle_time") {
                         Ok(val) => val.to_string().parse::<u64>().unwrap_or(15),
-                        Err(_) => 15,
+                        Err(_) => 15, // Default fallback
                     };
                     controller_handle = Some(thread::spawn(move || {
                         // Select controller
@@ -287,7 +289,7 @@ fn main() -> Result<()> {
                             match SysfsOrangePiHal::new() {
                                 Ok(hal) => {
                                     let mut bridge = HardwareBridge::new(board_map, hal);
-                                    handle_fan_command(&mut bridge, target_state, "RELAY_FAN");
+ handle_fan_command(&mut bridge, target_state, "RELAY_FAN");
                                 }
                                 Err(e) => {
                                     println!("[ERROR] Failed to initialize SysfsOrangePiHal: {:?}. Falling back to DummyHal.", e);

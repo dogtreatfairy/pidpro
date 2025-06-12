@@ -33,7 +33,7 @@ fn print_relay_status<M: BoardPinMap, H: crate::boards::PlatformHal>(bridge: &mu
     let mut stdout = stdout();
     // Clear the terminal and move cursor to top-left
     let _ = execute!(stdout, Clear(ClearType::All), MoveTo(0, 0));
-    writeln!(stdout, "==== Relay Status ====").unwrap();
+    writeln!(stdout, "==== Relay Status ({}) ====", bridge.get_board_name()).unwrap();
     for &(relay, is_on) in relay_states {
         if let Some(pin) = bridge.pin_map.pin_for_function(relay) {
             let state = if is_on { "On (High)" } else { "Off (Low)" };
