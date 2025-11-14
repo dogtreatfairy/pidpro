@@ -1,0 +1,1 @@
+{"config":{"active_controller":"pid_std","controllers":{"pid_sec":{"cycle_time":15,"pb":70,"td":100,"ti":35,"u_max":0.9,"u_min":0.1},"pid_std":{"cycle_time":15,"pb":65,"td":180,"ti":45,"u_max":0.9,"u_min":0.1}}}}
