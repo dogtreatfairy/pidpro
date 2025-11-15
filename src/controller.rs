@@ -57,20 +57,17 @@ impl Controller {
         Controller { active_controller, config, cycle, gains }
     }
     pub fn set(active: String){
-        
-        // Read the config file
         let  config_data = std::fs::read_to_string("config.json")
             .expect("Failed to read config.json");
         let mut json: serde_json::Value = serde_json::from_str(&config_data)
             .expect("Failed to parse JSON");
-        
-        // Update the active_controller in JSON
+ 
         json["config"]["active_controller"] = serde_json::json!(active);
         
-        // Write back to file
         std::fs::write("config.json", json.to_string())
             .expect("Failed to write config.json");
 
+        //Reload Controller
         Controller::load();
     }
     fn calculate_gains(config: &PIDConfig) -> PIDGains {
@@ -79,13 +76,11 @@ impl Controller {
         let kd = kp * config.td;
         PIDGains { kp, ki, kd }
     }
-    pub fn update(&mut self) -> i32 {
-        // Update output
+    pub fn ouput(&mut self) -> i32 {
         let u = 0;
         return u; 
     }
     pub fn print() {
-        // Load the current controller from config and print its values
         let c = Controller::load();
         println!("Active Controller: {}", c.active_controller);
         println!("PB: {}", c.config.pb);
